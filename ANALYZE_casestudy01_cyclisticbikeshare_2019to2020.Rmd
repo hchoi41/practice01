@@ -1,0 +1,933 @@
+---
+title: "ANALYZE_casestudy_01_cyclisticbikeshare_2019to2020"
+author: "Hongik Choi"
+date: "2024-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Front Matter
+```{r}
+# Libraries
+library(tidyverse) 
+library(janitor)
+library(skimr)
+library(lubridate)
+library(purrr)
+library(naniar)
+library(scales)
+
+# Data source
+data_2019q1 <- read.csv("C:/Users/siyke/OneDrive/020_learn_from_courses_mooc/2000.Analytics/coursera/coursera_googlecert_data-analytics/google_da_capstone/casestudy_01/2019q1-2020q1/Divvy_Trips_2019_Q1.csv")
+data_2020q1 <- read.csv("C:/Users/siyke/OneDrive/020_learn_from_courses_mooc/2000.Analytics/coursera/coursera_googlecert_data-analytics/google_da_capstone/casestudy_01/2019q1-2020q1/Divvy_Trips_2020_Q1.csv")
+```
+
+# Data exploration and data wrangling
+```{r}
+glimpse(data_2019q1)
+```
+- There are 12 columns.
+
+```{r}
+glimpse(data_2020q1)
+```
+- There are 13 columns.
+
+```{r}
+skim(data_2019q1)
+```
+- 'gender' column has 19,711 values as empty. That accounts for `r (19711/365069)*100`% of the entire rows of data.
+- 'birthyear' column as 18,023 missing values. That accounts for `r (18023/365069)*100`% of the entire rows of data.
+
+```{r}
+gg_miss_var(data_2019q1)
+```
+
+```{r}
+skim(data_2020q1)
+```
+
+- Only the columns 'end_station_id', 'end_lat', and 'end_lng' have 1 missing rows each.
+
+```{r}
+gg_miss_var(data_2020q1)
+```
+
+## Empty or missing values are removed
+```{r}
+# Empty or missing values are removed because they only represent a small amount of the entire dataset. This is only true for 2020 file. 2019 file's columns containing missing values ('gender', 'birthyear') will be removed because 2020q1 file does not contain that information.
+data_2020q1_cleaned <- data_2020q1 %>% 
+  filter(!is.na(end_station_id) & !is.na(end_lat) & !is.na(end_lng))
+```
+
+## Check that the removal is complete and successful
+```{r}
+skim(data_2020q1_cleaned)
+```
+
+## Columns are modified
+
+### Unused columns removed: Removed for 2019
+```{r}
+data_2019q1_cleaned <- data_2019q1 %>% 
+  select(-trip_id, -bikeid, -gender, -birthyear)
+
+# Check for any missing or empty values
+skim(data_2019q1_cleaned)
+```
+
+### Unused columns removedRemoved for 2020
+```{r}
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  select(-ride_id, -rideable_type, -start_lat, -start_lng, -end_lat, -end_lng)
+```
+
+
+## Columns are wrangeld.
+### Column names are unified.
+```{r}
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  rename(
+    start_time = started_at,
+    end_time = ended_at,
+    from_station_id = start_station_id,
+    from_station_name = start_station_name,
+    to_station_id = end_station_id,
+    to_station_name = end_station_name,
+    usertype = member_casual
+  )
+```
+
+
+### Columns' data types are adjusted.
+```{r}
+# Turn star_time and end_time into ymd_hms format using lubridate.
+data_2019q1_cleaned <- data_2019q1_cleaned %>% 
+  mutate(
+    start_time = ymd_hms(start_time),
+    end_time = ymd_hms(end_time)
+  )
+
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  mutate(
+    start_time = ymd_hms(start_time),
+    end_time = ymd_hms(end_time)
+  )
+
+# Turn 'from_station_id' and 'to_station_name' from INT to CHR
+data_2019q1_cleaned <- data_2019q1_cleaned %>% 
+  mutate(
+    from_station_id = as.character(from_station_id),
+    to_station_id = as.character(to_station_id)
+  )
+
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  mutate(
+    from_station_id = as.character(from_station_id),
+    to_station_id = as.character(to_station_id)
+  )
+```
+
+### 'tripduration' column is created for data_2020q1_cleaned
+```{r}
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  mutate(tripduration = as.numeric(difftime(end_time, start_time, units = "secs")))
+
+data_2019q1_cleaned <- data_2019q1_cleaned %>% 
+  mutate(tripduration = as.numeric(difftime(end_time, start_time, units = "secs")))
+```
+
+### Rearrange columns so that the orders are consistent across the dataframes
+```{r}
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  select(start_time, end_time, tripduration, from_station_id, from_station_name, to_station_id, to_station_name, usertype)
+```
+
+## Values in the columns are consistently applied
+```{r}
+# 2019 file's 'usertype' column contains "Subscriber" and "Customer" as the values while 2020 file's 'usertype' column contains "member" and "casual".
+data_2019q1_cleaned <- data_2019q1_cleaned %>% 
+  mutate(usertype = recode(usertype,
+                           "Subscriber" = "Member",
+                           "Customer" = "Casual"))
+
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  mutate(usertype = recode(usertype,
+                           "member" = "Member",
+                           "casual" = "Casual"))
+```
+
+## Check that the Station ID and Station Names are consistenly applied
+
+### Check that the usage of station_id <-> station_name is consistent among froms
+```{r}
+# Four columns have to be checked: from_station_id, from_station_name, to_station_id, to_station_name
+
+# 1. Check that the usage of station_id <-> station_name is consistent among froms
+temp_unique_from_2019 <- data_2019q1_cleaned %>% 
+  select(from_station_id, from_station_name) %>% 
+  distinct()
+
+temp_unique_from_2020 <- data_2020q1_cleaned %>% 
+  select(from_station_id, from_station_name) %>%
+  distinct()
+
+temp_consistency_from <- temp_unique_from_2019 %>% 
+  full_join(temp_unique_from_2020, by = "from_station_id", suffix = c("_2019", "_2020")) %>% 
+  filter(from_station_name_2019 != from_station_name_2020)
+
+# Most of the values differ because of minor variations in names, such as added descriptions in parenthesis or additional characters (e.g., "(*)" or "(Temp)"). Texts within a parenthesis are identified and removed.
+temp_consistency_from_cleaned <- temp_consistency_from %>% 
+  mutate(
+    from_station_name_2019 = str_remove_all(from_station_name_2019, "\\s*\\(.*\\)"),
+    from_station_name_2020 = str_remove_all(from_station_name_2020, "\\s*\\(.*\\)")
+    ) %>% 
+  filter(from_station_name_2019 != from_station_name_2020)
+
+temp_consistency_from_cleaned
+
+# Some of the station_id that can be made full are fixed
+  # Wolcott -> Wolcott Ave & Montrose Ave
+  # Archer -> Archer Ave & 37th St
+
+temp_consistency_from_cleaned <- temp_consistency_from_cleaned %>% 
+  mutate(from_station_name_2019 = recode(from_station_name_2019,
+                                    "Wolcott" = "Wolcott Ave & Montrose Ave",
+                                    "Archer" = "Archer Ave & 37th St")) %>% 
+  filter(from_station_name_2019 != from_station_name_2020)
+```
+
+### Check that the usage of station_id <-> station_name is consistent among tos
+```{r}
+# 2. Check that the usage of station_id <-> station_name is consistent among tos
+temp_unique_to_2019 <- data_2019q1_cleaned %>% 
+  select(to_station_id, to_station_name) %>% 
+  distinct()
+
+temp_unique_to_2020 <- data_2020q1_cleaned %>% 
+  select(to_station_id, to_station_name) %>% 
+  distinct()
+
+temp_consistency_to <- temp_unique_to_2019 %>% 
+  full_join(temp_unique_to_2020, by = "to_station_id", suffix = c("_2019", "_2020")) %>% 
+  filter(to_station_name_2019 != to_station_name_2020)
+
+temp_consistency_to
+
+# Most of the values differ because of minor variations in names, such as added descriptions in parenthesis or additional characters (e.g., "(*)" or "(Temp)"). Texts within a parenthesis are identified and removed.
+temp_consistency_to_cleaned <- temp_consistency_to %>% 
+  mutate(
+    to_station_name_2019 = str_remove_all(to_station_name_2019, "\\s*\\(.*\\)"),
+    to_station_name_2020 = str_remove_all(to_station_name_2020, "\\s*\\(.*\\)")
+  ) %>%
+  filter(to_station_name_2019 != to_station_name_2020)
+
+temp_consistency_to_cleaned
+
+# Some of the station_id that can be made full are fixed
+  # Wolcott -> Wolcott Ave & Montrose Ave
+  # Archer -> Archer Ave & 37th St
+temp_consistency_to_cleaned <-  temp_consistency_to_cleaned %>% 
+  mutate(
+    to_station_name_2019 = recode(to_station_name_2019,
+                                  "Wolcott" = "Wolcott Ave & Montrose Ave",
+                                  "Archer" = "Archer Ave & 37th St")) %>% 
+  filter(to_station_name_2019 != to_station_name_2020)
+
+```
+
+### Change values to make the station_id and station_name match
+```{r}
+# Because the discrepancies are the same for the "to" pair and "from" pair, we can assume that the change may be systematic (the station name changed or the route has been changed). However, because we do not have distance data between the stations, it is impossible to know with certainty that the stations have been changed. (longitude and latitude information is only available for 2020's data). Therefore, for the purpose of this analysis, 2019 names are used for station_id: 19, 208, 217, and 286.
+
+# Values within the parenthesis are removed AND 2019's inconsistent station_names are changed (station_name = Wolcott, Archer)
+
+data_2019q1_cleaned <- data_2019q1_cleaned %>% 
+  mutate(
+    from_station_name = str_remove_all(from_station_name, "\\s*\\(.*\\)"),
+    to_station_name = str_remove_all(to_station_name, "\\s*\\(.*\\)"),
+    from_station_name = recode(from_station_name,
+                               "Wolcott" = "Wolcott Ave & Montrose Ave",
+                               "Archer" = "Archer Ave & 37th St"),
+    to_station_name = recode(to_station_name,
+                             "Wolcott" = "Wolcott Ave & Montrose Ave",
+                             "Archer" = "Archer Ave & 37th St")
+    )
+
+# Values within the parenthesis are removed AND 2020's inconsistent station_names are changed (station_id = 19, 208, 217, 286)
+data_2020q1_cleaned <- data_2020q1_cleaned %>% 
+  mutate(
+    from_station_name = str_remove_all(from_station_name, "\\s*\\(.*\\)"),
+    to_station_name = str_remove_all(to_station_name, "\\s*\\(.*\\)"),
+    from_station_name = case_when(
+      from_station_id == 19 ~ "Loomis St & Taylor St",
+      from_station_id == 208 ~ "Ashland Ave & 21st St",
+      from_station_id == 217 ~ "Racine Ave & Fulton St",
+      from_station_id == 286 ~ "Franklin St & Quincy St",
+      TRUE ~ from_station_name
+    ),
+    to_station_name = case_when(
+      to_station_id == 19 ~ "Loomis St & Taylor St",
+      to_station_id == 208 ~ "Ashland Ave & 21st St",
+      to_station_id == 217 ~ "Racine Ave & Fulton St",
+      to_station_id == 286 ~ "Franklin St & Quincy St",
+      TRUE ~ to_station_name
+    ))
+```
+
+
+### Check that the usage of station_id <-> station_name is consistent across tos and froms
+```{r}
+# 3. Check that the usage of station_id <-> station name is consistent across froms and tos
+
+# Froms
+temp2_unique_from_2019 <- data_2019q1_cleaned %>% 
+  select(from_station_id, from_station_name) %>% 
+  distinct()
+
+temp2_unique_from_2020 <- data_2020q1_cleaned %>% 
+  select(from_station_id, from_station_name) %>%
+  distinct()
+
+temp2_consistency_from <- temp2_unique_from_2019 %>% 
+  full_join(temp2_unique_from_2020, by = "from_station_id", suffix = c("_2019", "_2020")) %>% 
+  filter(from_station_name_2019 != from_station_name_2020)
+
+temp2_consistency_from
+
+# Tos
+temp2_unique_to_2019 <- data_2019q1_cleaned %>% 
+  select(to_station_id, to_station_name) %>% 
+  distinct()
+
+temp2_unique_to_2020 <- data_2020q1_cleaned %>% 
+  select(to_station_id, to_station_name) %>% 
+  distinct()
+
+temp2_consistency_to <- temp2_unique_to_2019 %>% 
+  full_join(temp2_unique_to_2020, by = "to_station_id", suffix = c("_2019", "_2020")) %>% 
+  filter(to_station_name_2019 != to_station_name_2020)
+
+temp2_consistency_to
+```
+
+- There is no remaining observations where the full_join result shows where "to_station_name_2019 != to_station_name_2020" AND "from_station_name_2019 != from_station_name_2020". Therefore, we can infer that the values within the station_name columns are correctly changed.
+
+- Changes summarized:
+  - For 2019 Q1 data:
+    - from_station_name: Wolcott -> Wolcott Ave & Montrose Ave
+    - from_station_name: Archer -> Archer Ave & 37th St
+  - For 2020 Q1 data:
+    - from_station_name:
+      - from_station_id == 19 ~ "Loomis St & Taylor St",
+      - from_station_id == 208 ~ "Ashland Ave & 21st St",
+      - from_station_id == 217 ~ "Racine Ave & Fulton St",
+      - from_station_id == 286 ~ "Franklin St & Quincy St"
+    - to_station_name:
+      - to_station_id == 19 ~ "Loomis St & Taylor St",
+      - to_station_id == 208 ~ "Ashland Ave & 21st St",
+      - to_station_id == 217 ~ "Racine Ave & Fulton St",
+      - to_station_id == 286 ~ "Franklin St & Quincy St"
+      
+## Append the data for 2019 and 2020
+```{r}
+data_combined <- bind_rows(
+  data_2019q1_cleaned %>% mutate(source = "2019Q1"),
+  data_2020q1_cleaned %>% mutate(source = "2020Q1")
+)
+```
+
+## Create a column weekday
+```{r}
+# Create a column called 'weekday,' which takes in the value of 1 for Sunday and 7 for Saturday. 
+data_combined <- data_combined %>% 
+  mutate(
+    start_day = wday(start_time, label = TRUE, abbr = FALSE),
+    end_day = wday(end_time, label = TRUE, abbr = FALSE)
+  ) %>% 
+  relocate(start_day, end_day, .after = tripduration)
+```
+
+# Conduct Data Analysis
+## First big question: How do annual members and casual riders use Cyclistic bikes differently?
+```{r}
+# Questions about time
+summary(data_combined)
+
+# During the investigation, it is found that there are erroneous values in tripdurations column: negative values
+cal_negative_tripduration_count <- data_combined %>% 
+  filter(tripduration < 0) %>% 
+  nrow()
+```
+- During the investigation, it is found that there are erroneous values in tripdurations column: negative values
+  - Observations whose tripudration is negative: 116
+  - Total observations: 791955
+
+```{r}
+# Negative values are removed
+data_combined_pos <- data_combined %>% 
+  filter(tripduration >= 0)
+```
+
+- Total observation (after removal): `r 791955 - 791839`.
+
+## Check whether any dates are outside the upper boundary (2020 1Q)
+```{r}
+var_after_march_2020 <- data_combined_pos %>% 
+  filter(start_time > ymd("2020-04-01")) %>% 
+  summarise(any_after = any(!is.na(start_time))) %>% 
+  pull(any_after)
+```
+
+- No data has "start_date" that occurs after 2024-04-01 (i.e., no dates are on 2024-04-01).
+
+### Member's trip duration is analyzed
+```{r}
+# 1. Tripduration is explored
+
+# 'tripduration', which is in seconds would better be transformed into minutes for the ease of analysis
+data_combined_pos <- data_combined_pos %>% 
+  mutate(tripduration_min = tripduration/60) %>% 
+  relocate(tripduration_min, .after = tripduration)
+
+# 'tripduration_min' is explored
+data_chart_combined_member <- data_combined_pos %>% 
+  filter(usertype == "Member")
+
+# how many outlier values are in tripduration_min? (Assuming Gaussian distribution, the definition of "any value above or below 3 standard deviations from the mean" is used as the definition of outlier. Only upper bound is checked since the dataset is a right-tailed distribution.)
+cal_tripduration_stats_member <- data_chart_combined_member %>% 
+  summarize(
+    mean_trip_member = mean(tripduration_min, na.rm = TRUE),
+    sd_trip_member = sd(tripduration_min, na.rm = TRUE)
+  )
+  
+var_upper_bound <- cal_tripduration_stats_member$mean_trip_member + 3 * cal_tripduration_stats_member$sd_trip_member
+
+var_outlier_member <- data_chart_combined_member %>% 
+  filter(tripduration_min > var_upper_bound) %>% 
+  nrow()
+
+# The number of ouliers are 364
+var_outlier_member
+
+data_chart_combined_member_normal <- data_chart_combined_member %>% 
+  filter(tripduration_min <= var_upper_bound)
+
+# Creating a graph without the outlier
+ggplot(data = data_chart_combined_member_normal, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Member)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+# What is the number of variables for 'usertype == member' for Tripduration (Minutes) in between 200 (exclusive) and var_upper_bound (inclusive)?
+var_large_member <- data_chart_combined_member %>% 
+  filter(tripduration_min <= var_upper_bound & tripduration_min > 200) %>% 
+  nrow()
+
+# The number of observations between 200 (inclusive) and var_upper_bound is 384.
+var_large_member <- data_chart_combined_member %>% 
+  filter(tripduration_min <= var_upper_bound & tripduration_min > 200) %>% 
+  nrow()
+
+# Only minutes less than or equal to 200 are graphed
+data_chart_combined_member_less200 <- data_chart_combined_member %>% 
+  filter(tripduration_min <= 200)
+
+# Creating a graph below 200
+ggplot(data = data_chart_combined_member_less200, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Member)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 200 Minutes are shown") +
+  xlim(0, 200) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+# The number of observations between 100 (exclusive) and 200 (inclusive) is 431.
+var_big_member <- data_chart_combined_member %>% 
+  filter(tripduration_min <= 200 & tripduration_min > 100) %>% 
+  nrow()
+
+# Only minutes less than or equal to 100 are graphed
+data_chart_combined_member_less100 <- data_chart_combined_member %>% 
+  filter(tripduration_min <= 100)
+
+# Creating a graph below 100
+ggplot(data = data_chart_combined_member_less100, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Member)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 100 Minutes are shown") +
+  xlim(0, 100) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+# The number of observations between 50 (exclusive) and 100 (inclusive) is 2415.
+var_medium_member <- data_chart_combined_member %>% 
+  filter(tripduration_min <= 100 & tripduration_min > 50) %>% 
+  nrow()
+
+# Only minutes less than or equal to 50 are graphed
+data_chart_combined_member_less50 <- data_chart_combined_member %>% 
+  filter(tripduration_min <= 50)
+
+# Creating a graph below 50
+ggplot(data = data_chart_combined_member_less50, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Member)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 50 Minutes are shown") +
+  xlim(0, 50) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+```
+- For members most of the trips last less than 30 minutes.
+
+- Highest bin width occurs at 5 minute range.
+
+- This can be hypothesized as Members using the bikes for commute purposes, which would be validated upon checking the ride usage time.
+
+### Causal user's trip duration is analyzed
+
+```{r}
+# 'tripduration_min' is explored
+data_chart_combined_casual <- data_combined_pos %>% 
+  filter(usertype == "Casual")
+
+# how many outlier values are in tripduration_min? (Assuming Gaussian distribution, the definition of "any value above or below 3 standard deviations from the mean" is used as the definition of outlier. Only upper bound is checked since the dataset is a right-tailed distribution.)
+cal_tripduration_stats_casual <- data_chart_combined_casual %>% 
+  summarize(
+    mean_trip = mean(tripduration_min, na.rm = TRUE),
+    sd_trip = sd(tripduration_min, na.rm = TRUE)
+  )
+  
+var_upper_bound_casual <- cal_tripduration_stats_casual$mean_trip + 3 * cal_tripduration_stats_casual$sd_trip
+
+var_outlier_casual <- data_chart_combined_casual %>% 
+  filter(tripduration_min > var_upper_bound) %>% 
+  nrow()
+
+# The number of ouliers are 491
+var_outlier_casual
+
+# The number of observations between 200 (inclusive) and var_upper_bound is 1086.
+var_large_casual <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= var_upper_bound_casual & tripduration_min > 200) %>% 
+  nrow()
+
+# Only minutes less than or equal to 200 are graphed
+data_chart_combined_casual_less200 <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= 200)
+
+# Creating a graph below 200
+ggplot(data = data_chart_combined_casual_less200, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Casual)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 200 Minutes are shown") +
+  xlim(0, 200) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+# Only minutes less than or equal to 100 are graphed
+data_chart_combined_casual_less100 <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= 100)
+
+# Creating a graph below 100
+ggplot(data = data_chart_combined_casual_less100, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Casual)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 100 Minutes are shown") +
+  xlim(0, 100) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+```
+- There are more outliers (491) for Casual usertype than the outliers (346) for Member usertype.
+
+- Also, the mean and the SD (standard deviation) of the tripduration for the Casual usertype is far larger than that for the Member usertype.
+
+```{r}
+# What is the general descriptive statistics of the tripduration for the two different usertypes (Casual vs. Members)?
+cal_tripduration_stat <- data_combined_pos %>% 
+  group_by(usertype) %>% 
+  summarize(
+    mean = mean(tripduration_min),
+    median = median(tripduration_min),
+    sd = sd(tripduration_min),
+    min = min(tripduration_min),
+    max = max(tripduration_min)
+            )
+
+cal_tripduration_stat
+
+```
+
+- This suggests that Casual usertype has varying use cases. And some are using the service disproportionately.
+
+### Analyze the start_time and end_time of the casual users
+```{r}
+cal_time_hour_casual <- data_chart_combined_casual %>% 
+  mutate(hour = hour(start_time)) %>% 
+  group_by(hour) %>% 
+  summarise(trip_count = n()) %>% 
+  arrange(desc(trip_count))
+
+cal_time_hour_casual
+```
+
+- It appears that Sunlight could  be the main predictor of bike usage.
+  - Most usage occurs from 13 to 17.
+  - It can slightly be expanded to include 11 to 18.
+
+### Analyze the start_day and end_day of the casual users
+```{r}
+# Analyze hour-start day combination
+cal_time_hour_startday_casual <- data_chart_combined_casual %>% 
+  mutate(
+    day = wday(start_time, label = TRUE, abbr = FALSE),
+    hour = hour(start_time)
+  ) %>% 
+  group_by(day, hour) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count))
+
+cal_time_hour_startday_casual <-  cal_time_hour_startday_casual %>% 
+  mutate(day = factor(day, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
+
+ggplot(cal_time_hour_startday_casual, aes(x = hour, y = day, fill = trip_count)) +
+  geom_tile(color = "white") +
+  scale_fill_distiller(palette = "Greys", direction = 1) +
+  labs(title = "Bike Usage by Day and Hour for Casual customers",
+       x = "Hour of Day",
+       y = "Day of the Week",
+       fill = "Trip Count") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Visualizing hour-start day combination
+cal_time_hour_startday_casual 
+
+```
+
+- Sunday and Saturday seems to have the highest usage.
+
+- From this fact, we can infer that the usage is mostly for leisure (picnic) instead of commute.
+
+- Let's further analyze location data to check which spots might be most suitable for advertisements.
+
+### Analyze the from_station_id, from_station_name, to_station_id, and to_station_name of the casual users 
+```{r}
+# Explore popular starting station for the Casual usertype
+cal_loc_popstart_casual <- data_chart_combined_casual %>% 
+  group_by(from_station_id, from_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popstart_casual
+
+# Compare the popular starting station for the Member usertype
+cal_loc_popstart_member <- data_chart_combined_member %>% 
+  group_by(from_station_id, from_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popstart_member
+
+# Explore popular ending station for the Casual usertype
+cal_loc_popend_casual <- data_chart_combined_casual %>% 
+  group_by(to_station_id, to_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>%
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popend_casual
+
+# Compare the popular ending station for the Member usertype
+cal_loc_popend_member <- data_chart_combined_member %>% 
+  group_by(to_station_id, to_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popend_member
+
+# Check for any row that started out as HQ QR but ended up elsewhere
+var_starthq_endnothq <- data_chart_combined_casual %>%
+  filter(from_station_id == 675 & to_station_id != 675)
+
+var_starthq_endnothq
+
+var_hubbard_bikecheck <- data_combined_pos %>% 
+  filter(from_station_id == 671 | to_station_id == 671)
+
+var_hubbard_bikecheck
+
+# Check for other potential repair center station names
+temp_unique_from_station <- data_combined_pos %>% 
+  distinct(from_station_name)
+
+temp_unique_to_station <- data_combined_pos %>% 
+  distinct(to_station_name)
+
+# Check whether any "Huabbard", "test" exist within the dataframes containing unique station names
+var_station_checker <- c("HUBBARD", "Bike", "Test", "Check", "Maintenance", "Repair", "QR", "HQ", "Divvy")
+var_station_checker <- str_c("(?i)", str_c(var_station_checker, collapse = "|"))
+
+temp_from_station_suspicious <- temp_unique_from_station %>% 
+  filter(str_detect(from_station_name, var_station_checker))
+temp_from_station_suspicious
+
+temp_to_station_suspicious <- temp_unique_to_station %>% 
+  filter(str_detect(to_station_name, var_station_checker))
+temp_to_station_suspicious
+
+# Check any station name without "St" included
+temp_from_station_suspicious2 <- temp_unique_from_station %>% 
+  filter(!str_detect(from_station_name, "(?i)St"))
+temp_from_station_suspicious2
+
+temp_to_station_suspicious1 <- temp_unique_to_station %>% 
+  filter(!str_detect(to_station_name, "(?i)St"))
+temp_to_station_suspicious1
+
+# Count how many rows are involved with the suspicious stations
+var_station_suspicious <- c("MTL-ECO5.1-01", "HQ QR", "HUBBARD ST BIKE CHECKING", "DIVVY Map Frame B/C Station", "DIVVY CASSETTE REPAIR MOBILE STATION")
+
+var_station_suspicious <- str_c(var_station_suspicious, collapse = "|")
+
+temp_suspicious <- data_combined_pos %>%
+  filter(str_detect(from_station_name, var_station_suspicious) | str_detect(to_station_name, var_station_suspicious))
+```
+
+- "HQ QR" station name has to be removed since this isn't a physical location. According to the meta data found on the web regrading the Cyclistic Bike Share data, "HQ QR" station name is the code used for representing the repair center.
+
+- Another repair center station_id appear to be 671, which has the station name of "HUBBARD ST BIKE CHECKING".
+
+- Anything that looks out of the ordinary from the combination of checking mechanism in conjunction with the visual inspection flags these station names as suspicious (i.e., not the stations for the purpose of serving the customers but used for the operations of the bike riding service by the bike riding service provider.)
+  - MTL-ECO5.1-01
+  - HQ QR
+  - HUBBARD ST BIKE CHECKING
+  - DIVVY Map Frame B/C Station
+  - DIVVY CASSETTE REPAIR MOBILE STATION
+
+- There are 3,719 observations that either have one of the suspicious station names. They will be removed from the dataset.
+
+### Remove suspicious station names (data_combined_pos is changed!)
+```{r}
+data_combined_pos <- data_combined_pos %>% 
+  anti_join(temp_suspicious, by = names(temp_suspicious))
+```
+
+### Data is further checked
+```{r}
+cal_tripduration_stat <- data_combined_pos %>% 
+  group_by(usertype) %>% 
+  summarize(
+    mean = mean(tripduration_min),
+    median = median(tripduration_min),
+    sd = sd(tripduration_min),
+    min = min(tripduration_min),
+    max = max(tripduration_min)
+            )
+
+cal_tripduration_stat
+```
+
+- Now we see that the standard deviation has significantly reduced for Casual.
+  - SD before suspicious station names removed: 1623.6335
+  - SD after suspicious station names removed: 1467.425
+
+- Also, Max and Min changed for the Casual usertype
+  - Max before suspicious station names removed: 177200.4
+  - Max after suspicious station names removed: 156450.4
+  - Min before suspicious station names removed: 0
+  - Min after suspicious station names removed: 0.0333
+
+- Many more maintenance seem to have occurred under the Casual usertype name.
+
+```{r}
+# 'tripduration_min' is explored
+data_chart_combined_casual <- data_combined_pos %>% 
+  filter(usertype == "Casual")
+
+# how many outlier values are in tripduration_min? (Assuming Gaussian distribution, the definition of "any value above or below 3 standard deviations from the mean" is used as the definition of outlier. Only upper bound is checked since the dataset is a right-tailed distribution.)
+cal_tripduration_stats_casual <- data_chart_combined_casual %>% 
+  summarize(
+    mean_trip = mean(tripduration_min, na.rm = TRUE),
+    sd_trip = sd(tripduration_min, na.rm = TRUE)
+  )
+  
+var_upper_bound_casual <- cal_tripduration_stats_casual$mean_trip + 3 * cal_tripduration_stats_casual$sd_trip
+
+var_outlier_casual <- data_chart_combined_casual %>% 
+  filter(tripduration_min > var_upper_bound) %>% 
+  nrow()
+
+# The number of ouliers are 491
+var_outlier_casual
+
+# The number of observations between 200 (inclusive) and var_upper_bound is 1086.
+var_large_casual <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= var_upper_bound_casual & tripduration_min > 200) %>% 
+  nrow()
+
+# Only minutes less than or equal to 200 are graphed
+data_chart_combined_casual_less200 <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= 200)
+
+# Creating a graph below 200
+ggplot(data = data_chart_combined_casual_less200, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Casual)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 200 Minutes are shown") +
+  xlim(0, 200) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+
+# Only minutes less than or equal to 100 are graphed
+data_chart_combined_casual_less100 <- data_chart_combined_casual %>% 
+  filter(tripduration_min <= 100)
+
+# Creating a graph below 100
+ggplot(data = data_chart_combined_casual_less100, mapping = aes(x = tripduration_min)) +
+  geom_histogram(fill = "white", color = "black") +
+  labs(title = "Histogram of Trip Duration by User Type (Casual)",
+       x = "Trip Duration (Minutes)",
+       y = "Frequency",
+       caption = "Only values less than or equal to 100 Minutes are shown") +
+  xlim(0, 100) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+- The output hasn't changed significantly.
+
+### Analyze the start_day and end_day of the casual users (again without the suspicious station names)
+
+```{r}
+# Analyze hour-start day combination
+cal_time_hour_startday_casual <- data_chart_combined_casual %>% 
+  mutate(
+    day = wday(start_time, label = TRUE, abbr = FALSE),
+    hour = hour(start_time)
+  ) %>% 
+  group_by(day, hour) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count))
+
+cal_time_hour_startday_casual <-  cal_time_hour_startday_casual %>% 
+  mutate(day = factor(day, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
+
+ggplot(cal_time_hour_startday_casual, aes(x = hour, y = day, fill = trip_count)) +
+  geom_tile(color = "white") +
+  scale_fill_distiller(palette = "Greys", direction = 1) +
+  labs(title = "Bike Usage by Day and Hour for Casual customers",
+       x = "Hour of Day",
+       y = "Day of the Week",
+       fill = "Trip Count") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Visualizing hour-start day combination
+cal_time_hour_startday_casual 
+```
+
+### Analyze the start_day and end_day of the Member users
+
+```{r}
+# Analyze hour-start day combination
+cal_time_hour_startday_member <- data_chart_combined_member %>% 
+  mutate(
+    day = wday(start_time, label = TRUE, abbr = FALSE),
+    hour = hour(start_time)
+  ) %>% 
+  group_by(day, hour) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count))
+
+cal_time_hour_startday_member <-  cal_time_hour_startday_member %>% 
+  mutate(day = factor(day, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
+
+ggplot(cal_time_hour_startday_member, aes(x = hour, y = day, fill = trip_count)) +
+  geom_tile(color = "white") +
+  scale_fill_distiller(palette = "Greys", direction = 1) +
+  labs(title = "Bike Usage by Day and Hour for Members",
+       x = "Hour of Day",
+       y = "Day of the Week",
+       fill = "Trip Count") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Visualizing hour-start day combination
+cal_time_hour_startday_member
+```
+
+### Compare popular starting and station for the Casual users vs. that for the Member users
+
+```{r}
+# Explore popular starting station for the Casual usertype
+cal_loc_popstart_casual <- data_chart_combined_casual %>% 
+  group_by(from_station_id, from_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popstart_casual
+
+# Compare the popular starting station for the Member usertype
+cal_loc_popstart_member <- data_chart_combined_member %>% 
+  group_by(from_station_id, from_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popstart_member
+
+# Explore popular ending station for the Casual usertype
+cal_loc_popend_casual <- data_chart_combined_casual %>% 
+  group_by(to_station_id, to_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>%
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popend_casual
+
+# Compare the popular ending station for the Member usertype
+cal_loc_popend_member <- data_chart_combined_member %>% 
+  group_by(to_station_id, to_station_name) %>% 
+  summarise(trip_count = n(), .groups = "drop") %>% 
+  arrange(desc(trip_count)) %>% 
+  slice_head(n = 10)
+
+cal_loc_popend_member
+```
+
+- Popular locations for the Casual usertype based on the from_station_name can all be considered to be sight seeing locations.
+
+- Considering that the urge to use the service is maximized before the service is used, it would be wise to have advertisements located near from_station_name.
+
+- Also, it would be wise to have a weekend plan membership, which would convert many of the casual picnic lovers into membership as well.
